@@ -6,7 +6,7 @@ ENCODING = "utf-8"
 
 
 def user_and_password_exists(user_id: str, password: str) -> bool:
-    path = Path(FILE_NAME)
+    path = Path(__file__).parent / Path(FILE_NAME)
     if not path.exists():
         return False
     for line in path.read_text(encoding=ENCODING).splitlines():
@@ -17,7 +17,7 @@ def user_and_password_exists(user_id: str, password: str) -> bool:
 
 
 def insert_new_user_and_password(user_id: str, password: str) -> bool:
-    path = Path(FILE_NAME)
+    path = Path(__file__).parent / Path(FILE_NAME)
     if user_and_password_exists(user_id, password):
         return False
     record = f"{user_id} {password}\n"

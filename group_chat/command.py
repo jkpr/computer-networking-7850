@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from validation import validate_user_and_password
+from .validation import validate_user_and_password
 
 
 class Command(ABC):

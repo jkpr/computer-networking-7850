@@ -2,7 +2,7 @@ import argparse
 import socket
 import threading
 
-from command import (
+from .command import (
     Command,
     ConnectCommand,
     DisconnectCommand,
@@ -14,8 +14,7 @@ from command import (
     UserIdCommand,
     WhoCommand,
 )
-
-from settings import HOST, SERVER_PORT
+from .settings import HOST, SERVER_PORT
 
 
 class Client:

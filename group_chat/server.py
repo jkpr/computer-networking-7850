@@ -3,9 +3,9 @@ import socket
 import threading
 from collections import defaultdict
 
-import db
-from command import COMMAND_LOOKUP, Command, DisconnectCommand, PrintCommand
-from settings import HOST, SERVER_PORT, MAX_CONNECTIONS
+from .db import insert_new_user_and_password, user_and_password_exists
+from .command import COMMAND_LOOKUP, Command, DisconnectCommand, PrintCommand
+from .settings import HOST, SERVER_PORT, MAX_CONNECTIONS
 
 
 class Server:
@@ -90,13 +90,13 @@ class Server:
         self.disconnect(client_socket)
     
     def authenticate(self, user_id: str, password: str) -> bool:
-        return db.user_and_password_exists(user_id, password)
+        return user_and_password_exists(user_id, password)
     
     def login(self, user_id: str, client_socket: socket.socket):
         self.current_users[user_id] = client_socket
 
     def create_user(self, user_id: str, password: str) -> bool:
-        return db.insert_new_user_and_password(user_id, password)
+        return insert_new_user_and_password(user_id, password)
     
     def get_all_connected_users(self) -> list[str]:
         return sorted(self.current_users, key=str.lower)
