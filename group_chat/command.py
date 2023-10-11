@@ -1,67 +1,73 @@
 from abc import ABC, abstractmethod
 
-from server_message import Preamble, ServerMessage
+from validation import validate_user_and_password
 
 
 class Command(ABC):
     ENCODING = "utf-8"
     HEADER_WIDTH = 4
-    
+    MAX_MESSAGE_SIZE = 1024
+
     identifier = "_"
     keys = []
 
-    def __init__(self, socket, *args, **kwargs):
+    def __init__(self, socket, *args, server=None, client=None, **kwargs):
         self.socket = socket
+        self.server = server
+        self.client = client
         if not kwargs and len(args) == len(self.keys):
             for arg, key in zip(args, self.keys):
                 setattr(self, key, arg)
         elif not args:
             for key in self.keys:
                 setattr(self, key, kwargs[key])
+
+    @staticmethod
+    def read(socket, count):
+        chunks = []
+        total_received = 0
+        while total_received < count:
+            chunk = socket.recv(min(count - total_received, Command.MAX_MESSAGE_SIZE))
+            chunks.append(chunk)
+            total_received += len(chunk)
+        return b''.join(chunks)
     
     @abstractmethod
-    def execute(self, server):
+    def execute(self):
         ...
 
     @staticmethod
-    @abstractmethod
-    def help() -> str:
-        ...
+    def get_help() -> str:
+        return ""
 
     def validate(self) -> bool:
         return True
 
-    def request(self):
-        self.socket.sendall(self.request_payload())
+    def request(self, with_lock=False):
+        if with_lock and self.server:
+            with self.server.locks[self.socket.fileno()]:
+                self.socket.sendall(self.get_request_payload())
+        else:
+            self.socket.sendall(self.get_request_payload())
 
-    def request_payload(self):
+    def get_request_payload(self):
         values = [getattr(self, key).encode(self.ENCODING) for key in self.keys]
         headers = [
             f"{len(byte_value):>{self.HEADER_WIDTH}}".encode(self.ENCODING) for byte_value in values
         ]
         return b''.join([self.identifier.encode(self.ENCODING), *headers, *values])
-    
-    @staticmethod
-    def socket_read_bytes(socket, count):
-        chunks = []
-        total_received = 0
-        while total_received < count:
-            chunk = socket.recv(min(count - total_received, 1024))
-            chunks.append(chunk)
-            total_received += len(chunk)
-        return b''.join(chunks)
         
     @classmethod
-    def from_socket(cls, socket):
+    def from_socket(cls, socket, server=None, client=None):
         header_size = len(cls.keys) * cls.HEADER_WIDTH
-        header_bytes = cls.socket_read_bytes(socket, header_size)
+        header_bytes = cls.read(socket, header_size)
         kwargs = {}
         for i, key in enumerate(cls.keys):
             header = header_bytes[(i*cls.HEADER_WIDTH):(i*cls.HEADER_WIDTH + cls.HEADER_WIDTH)]
             count = int(header.decode(cls.ENCODING))
-            value_bytes = cls.socket_read_bytes(socket, count)
+            value_bytes = cls.read(socket, count)
             kwargs[key] = value_bytes.decode(cls.ENCODING)
-        return cls(socket, **kwargs)
+        return cls(socket, **kwargs, server=server, client=client)
     
     def __repr__(self):
         values = [getattr(self, key) for key in self.keys]
@@ -71,32 +77,43 @@ class Command(ABC):
         return f"{self.__class__.__name__}({', '.join(args)})"
 
 
-def validate_user_and_password(user_id: str, password: str) -> bool:
-    good_user_id_len = len(user_id) in range(3,33)
-    good_password_len = len(password) in range(4,9)
-    no_spaces = [item.split()[0] == item for item in (user_id, password)]
-    return good_user_id_len and good_password_len and no_spaces
+class ConnectCommand(Command):
+    identifier = "C"
+    keys = ["version"]
+
+    def execute(self):
+        if int(self.version) != self.server.version:
+            message = f"Server is running version {self.server.version}. Update client to correct version."
+            DisconnectCommand(self.socket, message=message, server=self.server).request(with_lock=True)
+            self.server.disconnect(self.socket)
+        
+    def validate(self):
+        return self.version in ["1", "2"]
+
+
+class DisconnectCommand(Command):
+    identifier = "X"
+    keys = ["message"]
+
+    def execute(self):
+        self.client.disconnect()
+        self.client.print(self.message)
 
 
 class LoginCommand(Command):
     identifier = "A"
     keys = ["user_id", "password"]
 
-    def execute(self, server):
-        authenticated = server.authenticate(self.user_id, self.password)
+    def execute(self):
+        authenticated = self.server.authenticate(self.user_id, self.password)
         if authenticated:
-            server.login(self.user_id, self.socket)
-            success = True
-            message = f"Successfully logged in as '{self.user_id}'"
+            self.server.broadcast(f"{self.user_id} joins.")
+            self.server.login(self.user_id, self.socket)
+            self.server.print(f"{self.user_id} login")
+            UserIdCommand(self.socket, self.user_id, server=self.server).request(with_lock=True)
         else:
-            success = False
-            message = f"Unable to authenticate user '{self.user_id}'. Verify credentials or create new user?"
-        server.send(self.socket, ServerMessage(
-            self.identifier,
-            success,
-            Preamble.FROM_SERVER,
-            message
-        ))
+            message = f"Denied. User name or password incorrect."
+            PrintCommand(self.socket, message, server=self.server).request(with_lock=True)
     
     def validate(self) -> bool:
         return validate_user_and_password(self.user_id, self.password)
@@ -117,20 +134,14 @@ class NewUserCommand(Command):
     identifier = "N"
     keys = ["user_id", "password"]
 
-    def execute(self, server):
-        created = server.create_user(self.user_id, self.password)
+    def execute(self):
+        created = self.server.create_user(self.user_id, self.password)
         if created:
-            success = True
-            message = f"Successfully created user_id '{self.user_id}'. Will you login next?"
+            message = "New user account created. Please login."
+            self.server.print("New user account created.")
         else:
-            success = False
-            message = f"Unable to create user_id '{self.user_id}' because it is already taken."
-        server.send(self.socket, ServerMessage(
-            self.identifier,
-            success,
-            Preamble.FROM_SERVER,
-            message
-        ))  
+            message = "Denied. User account already exists."
+        PrintCommand(self.socket, message, server=self.server).request(with_lock=True)
     
     def validate(self) -> bool:
         return validate_user_and_password(self.user_id, self.password)
@@ -147,19 +158,26 @@ class NewUserCommand(Command):
         )
 
 
+class PrintCommand(Command):
+    identifier = "P"
+    keys = ["message"]
+
+    def execute(self):
+        self.client.print(self.message)
+
 
 class SendAllCommand(Command):
     identifier: str = "S"
     keys = ["message"]
 
-    def execute(self, server):
-        user_id = server.get_user_by_socket(self.socket)
-        server.broadcast(ServerMessage(
-            self.identifier,
-            True,
-            Preamble.public_from(user_id),
-            self.message
-        ))
+    def execute(self):
+        from_user_id = self.server.get_user_by_socket(self.socket)
+        full_message = f"{from_user_id}: {self.message}"
+        self.server.print(full_message)
+        for user_id, client_socket in self.server.current_users.items():
+            if self.server.version == 2 and from_user_id == user_id:
+                continue
+            PrintCommand(client_socket, full_message, server=self.server).request(with_lock=True)
     
     def validate(self) -> bool:
         return len(self.message) in range(1, 257)
@@ -174,26 +192,22 @@ class SendAllCommand(Command):
             "        - MESSAGE should be 1-256 characters."
         )
 
+
 class SendDirectCommand(Command):
     identifier = "D"
     keys = ["user_id", "message"]
 
-    def execute(self, server):
-        if server.is_user_connected(self.user_id):
-            sender_id = server.get_user_by_socket(self.socket)
-            server.direct_message(self.user_id, ServerMessage(
-                self.identifier,
-                True,
-                Preamble.dm_from(sender_id),
-                self.message
-            ))
+    def execute(self):
+        from_user_id = self.server.get_user_by_socket(self.socket)
+        client_socket = self.server.current_users.get(self.user_id)
+        self.server.print(f"{from_user_id} (to {self.user_id}): {self.message}")
+        if client_socket:
+            message = f"{from_user_id}= {self.message}"
+            to_socket = client_socket
         else:
-            server.send(self.socket, ServerMessage(
-                self.identifier,
-                False,
-                Preamble.FROM_SERVER,
-                f"User '{self.user_id}' is not connected. Check current users with 'who' command"
-            ))
+            message = "That user is not logged in."
+            to_socket = self.socket
+        PrintCommand(to_socket, message, server=self.server).request(with_lock=True)
 
     def validate(self) -> bool:
         return len(self.message) in range(1, 257) and len(self.user_id) in range(3, 33)
@@ -208,21 +222,22 @@ class SendDirectCommand(Command):
             "        - MESSAGE should be 1-256 characters."
         )
 
+class UserIdCommand(Command):
+    identifier = "U"
+    keys = ["user_id"]
+
+    def execute(self):
+        self.client.set_current_user(self.user_id)
+        self.client.print("login confirmed")
+
 class WhoCommand(Command):
     identifier = "W"
 
-    def execute(self, server):
-        you = server.get_user_by_socket(self.socket)
-        connected_users = server.get_all_connected_users()
-        connected_users_formatted = "\n".join(
-            [f"* {user}" if user == you else f"- {user}" for user in connected_users]
-        )
-        server.send(self.socket, ServerMessage(
-            self.identifier,
-            True,
-            Preamble.FROM_SERVER,
-            f"Current users (* indicates you):\n{connected_users_formatted}"
-        ))
+    def execute(self):
+        connected_users = self.server.get_all_connected_users()
+        connected_users_formatted = ", ".join(connected_users)
+        PrintCommand(self.socket, connected_users_formatted, server=self.server).request(with_lock=True)
+
     
     @staticmethod
     def help() -> str:
@@ -233,7 +248,9 @@ class WhoCommand(Command):
         )
 
 
+# TODO: is this correct?
 ALL_COMMANDS = [
+    ConnectCommand,
     LoginCommand,
     NewUserCommand,
     SendAllCommand,
@@ -242,4 +259,5 @@ ALL_COMMANDS = [
 ]
 
 
+# TODO maybe move to Client.py?
 COMMAND_LOOKUP = {command.identifier: command for command in ALL_COMMANDS}
