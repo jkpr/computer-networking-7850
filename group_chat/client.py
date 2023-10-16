@@ -1,3 +1,9 @@
+"""
+Group chat client.
+
+Supports version 1 (echo server) and version 2 (full group chat).
+"""
+
 import argparse
 import socket
 import threading
@@ -28,6 +34,7 @@ class Client:
         self.current_user = None
     
     def main(self):
+        """Start the client."""
         version_text = {1: "One", 2: "Two"}.get(self.version)
         print(f"My chat room client. Version {version_text}.")
         try:
@@ -54,9 +61,11 @@ class Client:
             self.disconnect()
 
     def disconnect(self):
+        """Disconnect the client from the server."""
         self.socket.close()
 
     def input_loop(self):
+        """Accept user commands, then validate and execute them."""
         while True:
             if self.socket.fileno() < 0:
                 break
@@ -131,6 +140,7 @@ class Client:
         self.disconnect()
 
     def receive_messages(self):
+        """Listen for commands from the server and execute them."""
         receive_commands = [
             DisconnectCommand,
             PrintCommand,
@@ -150,9 +160,11 @@ class Client:
                 break
 
     def print(self, message):
+        """Print a message for the client user."""
         print(message)
 
     def print_all_help(self):
+        """Print help message for all commands."""
         print()
         print("Usage:")
         print("    help")
@@ -165,10 +177,12 @@ class Client:
             print(command.help())
 
     def print_help(self, command: Command):
+        """Print the help message of a single command."""
         print("Usage:")
         print(command.help())
 
     def set_current_user(self, current_user):
+        """Set the current logged-in user."""
         self.current_user = current_user
 
 

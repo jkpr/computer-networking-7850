@@ -1,9 +1,40 @@
+"""
+All messages and commands passed between client and server.
+
+Each subclass of Command implements the command design pattern, meaning
+it stores all relevant information needed to check for validity and to
+be able to execute.
+"""
+
 from abc import ABC, abstractmethod
 
 from .validation import validate_user_and_password
 
 
 class Command(ABC):
+    """
+    Command base class, encapsulating basic rules of communication.
+
+    Each command is represented as a UTF-8 string.
+
+    - The first character (the identifier) represents the command type.
+    - Each command type has 0, 1, or 2 different fields. Each field has
+      a key.
+    - The length of each field is sent as a string of fixed width,
+      padded with " " (space), e.g. width of four bytes: "   1" or
+      "  24".
+    - After the headers, the field bytes are sent in order.
+
+    Example:
+
+    The "newuser" command has identifier N and sends two fields for the
+    user_id and the password. An example might be:
+
+    "N   6  10myusermypassword" (encoded to bytes with UTF-8).
+
+    This is sent from the client and meant to create a new user with
+    username "myuser" and password "mypassword".
+    """
     ENCODING = "utf-8"
     HEADER_WIDTH = 4
     MAX_MESSAGE_SIZE = 1024
@@ -24,6 +55,7 @@ class Command(ABC):
 
     @staticmethod
     def read(socket, count):
+        """Read a certain number of bytes from a socket."""
         chunks = []
         total_received = 0
         while total_received < count:
@@ -34,16 +66,20 @@ class Command(ABC):
     
     @abstractmethod
     def execute(self):
+        """Execute the command."""
         ...
 
     @staticmethod
     def get_help() -> str:
+        """Return help string for this command, if applicable."""
         return ""
 
     def validate(self) -> bool:
+        """Check if this this command is valid."""
         return True
 
     def request(self, with_lock=False):
+        """Send a command over the socket."""
         if with_lock and self.server:
             with self.server.locks[self.socket.fileno()]:
                 self.socket.sendall(self.get_request_payload())
@@ -51,6 +87,7 @@ class Command(ABC):
             self.socket.sendall(self.get_request_payload())
 
     def get_request_payload(self):
+        """Represent the command as a byte array for the socket."""
         values = [getattr(self, key).encode(self.ENCODING) for key in self.keys]
         headers = [
             f"{len(byte_value):>{self.HEADER_WIDTH}}".encode(self.ENCODING) for byte_value in values
@@ -59,6 +96,12 @@ class Command(ABC):
         
     @classmethod
     def from_socket(cls, socket, server=None, client=None):
+        """
+        Recreate this command object from the socket.
+
+        Presumably, the first byte (the identifier) has been read
+        already from the socket.
+        """
         header_size = len(cls.keys) * cls.HEADER_WIDTH
         header_bytes = cls.read(socket, header_size)
         kwargs = {}
@@ -78,6 +121,12 @@ class Command(ABC):
 
 
 class ConnectCommand(Command):
+    """
+    Communicate to the server which client software version is running.
+
+    Client to server command.
+    """
+
     identifier = "C"
     keys = ["version"]
 
@@ -92,6 +141,11 @@ class ConnectCommand(Command):
 
 
 class DisconnectCommand(Command):
+    """
+    Tell the client to disconnect.
+
+    Server to client command.
+    """
     identifier = "X"
     keys = ["message"]
 
@@ -101,6 +155,11 @@ class DisconnectCommand(Command):
 
 
 class LoginCommand(Command):
+    """
+    Login to the server.
+
+    Client to server command.
+    """
     identifier = "A"
     keys = ["user_id", "password"]
 
@@ -131,6 +190,11 @@ class LoginCommand(Command):
 
 
 class NewUserCommand(Command):
+    """
+    Create a new user for group chat.
+
+    Client to server command.
+    """
     identifier = "N"
     keys = ["user_id", "password"]
 
@@ -159,6 +223,11 @@ class NewUserCommand(Command):
 
 
 class PrintCommand(Command):
+    """
+    Print the message in the payload.
+
+    Server to client command.
+    """
     identifier = "P"
     keys = ["message"]
 
@@ -167,6 +236,11 @@ class PrintCommand(Command):
 
 
 class SendAllCommand(Command):
+    """
+    Broadcast the message in the payload to all logged in users.
+
+    Client to server command.
+    """
     identifier: str = "S"
     keys = ["message"]
 
@@ -194,6 +268,11 @@ class SendAllCommand(Command):
 
 
 class SendDirectCommand(Command):
+    """
+    Send a direct message to the specified user.
+
+    Client to server command.
+    """
     identifier = "D"
     keys = ["user_id", "message"]
 
@@ -223,6 +302,11 @@ class SendDirectCommand(Command):
         )
 
 class UserIdCommand(Command):
+    """
+    Announce to the client what user ID is logged in.
+
+    Server to client command.
+    """
     identifier = "U"
     keys = ["user_id"]
 
@@ -231,6 +315,11 @@ class UserIdCommand(Command):
         self.client.print("login confirmed")
 
 class WhoCommand(Command):
+    """
+    Request a list of logged in users.
+
+    Client to server command.
+    """
     identifier = "W"
 
     def execute(self):
@@ -248,8 +337,7 @@ class WhoCommand(Command):
         )
 
 
-# TODO: is this correct?
-ALL_COMMANDS = [
+ALL_CLIENT_TO_SERVER_COMMANDS = [
     ConnectCommand,
     LoginCommand,
     NewUserCommand,
@@ -259,5 +347,4 @@ ALL_COMMANDS = [
 ]
 
 
-# TODO maybe move to Client.py?
-COMMAND_LOOKUP = {command.identifier: command for command in ALL_COMMANDS}
+COMMAND_LOOKUP = {command.identifier: command for command in ALL_CLIENT_TO_SERVER_COMMANDS}

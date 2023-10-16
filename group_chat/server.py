@@ -1,3 +1,9 @@
+"""
+Group chat server.
+
+Supports version 1 (echo server) and version 2 (full group chat).
+"""
+
 import argparse
 import socket
 import threading
@@ -22,12 +28,14 @@ class Server:
         self.server_socket = None
 
     def get_user_by_socket(self, client_socket: socket.socket) -> str | None:
+        """Return the user ID for a given socket or None if not found."""
         for user_id, current_socket in self.current_users.items():
             if current_socket is client_socket:
                 return user_id
         return None
 
     def accept_connections(self):
+        """Start to run the server by accepting connections."""
         version_text = {1: "One", 2: "Two"}.get(self.version)
         print(f"My chat room server. Version {version_text}.")
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -54,6 +62,7 @@ class Server:
         self.disconnect_all()
 
     def disconnect(self, client_socket):
+        """Disconnect a client socket."""
         if client_socket.fileno() < 0:
             return
         if self.debug:
@@ -68,12 +77,14 @@ class Server:
             self.broadcast(f"{username_to_remove} left")
     
     def disconnect_all(self):
+        """Disconnect all sockets in preparation for shutting down."""
         for client_socket in self.connections:
             if self.debug:
                 print(f"Client disconnected: {client_socket.getpeername()}")
             client_socket.close()
 
     def handle_client(self, client_socket):
+        """Handle a client's messages and react."""
         while True:
             try:
                 command_type = client_socket.recv(1).decode(Command.ENCODING)
@@ -90,25 +101,32 @@ class Server:
         self.disconnect(client_socket)
     
     def authenticate(self, user_id: str, password: str) -> bool:
+        """Check if the given user ID and password exist in the DB."""
         return user_and_password_exists(user_id, password)
     
     def login(self, user_id: str, client_socket: socket.socket):
+        """Associate the given user ID with the given client socket."""
         self.current_users[user_id] = client_socket
 
     def create_user(self, user_id: str, password: str) -> bool:
+        """Create a new user in the DB."""
         return insert_new_user_and_password(user_id, password)
     
     def get_all_connected_users(self) -> list[str]:
+        """Return a list of all connected users IDs."""
         return sorted(self.current_users, key=str.lower)
     
     def is_user_connected(self, user_id) -> bool:
+        """Check if the given user ID is currently connected."""
         return user_id in self.current_users
     
     def broadcast(self, message: str):
+        """Send a message to all connected users."""
         for socket in self.current_users.values():
             PrintCommand(socket, message, server=self).request(with_lock=True)
 
     def print(self, message):
+        """Print a message for server logs."""
         print(message)
 
 
