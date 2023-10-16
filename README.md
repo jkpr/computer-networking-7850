@@ -5,7 +5,7 @@ Simply navigate to the source code.
 
 # How to run, version 2
 
-First, run the server
+First, run the server in a terminal window:
 
 ```
 python -m group_chat.server
@@ -17,7 +17,7 @@ Next, open another terminal and run the client
 python -m group_chat.client
 ```
 
-Repeat with as many terminals as needed.
+Repeat with as many terminals as needed, one per client.
 
 # Version 1
 
